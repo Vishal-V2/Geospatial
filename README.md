@@ -12,6 +12,7 @@ A FastAPI service that accepts a zipped Shapefile or a KML, extracts features, a
 - **SQLAlchemy** ≥2.0 + **SQLite** — ORM & storage (PostGIS-ready)
 - **pydantic-settings** ≥2.2 — environment-based config
 - **pytest** ≥8 + **httpx** ≥0.27 — testing
+- **ruff** — linting (CI)
 
 Requires **Python 3.12+**
 
@@ -38,9 +39,16 @@ docker build -t geo-measure-api .
 docker run -p 8000:8000 geo-measure-api
 ```
 
+**Multi-stage build** — builder stage installs deps, runtime stage copies only needed artifacts, runs as non-root user with health check.
+
 ### Tests
 ```bash
 pytest -v
+```
+
+### Lint
+```bash
+ruff check app tests
 ```
 
 ## API
@@ -75,8 +83,14 @@ Upload a `.zip` (Shapefile) or `.kml` file.
 ### GET `/api/files/{id}/`
 Returns file metadata.
 
-### GET `/api/files/{id}/measurements/?limit=100&offset=0`
+### GET `/api/files/{id}/measurements/?limit=100&offset=0&include_geometry=true`
 Returns paginated feature measurements.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `limit` | int | 100 | Page size (1–1000) |
+| `offset` | int | 0 | Pagination offset |
+| `include_geometry` | bool | true | Exclude geometry to reduce payload |
 
 **KML Response Example:**
 ```json
@@ -147,7 +161,7 @@ geo-measure-api/
 ├── app/
 │   ├── __init__.py
 │   ├── main.py          # FastAPI app, routes
-│   ├── config.py        # Pydantic settings
+│   ├── config.py        # Pydantic settings (SettingsConfigDict)
 │   ├── db.py            # SQLAlchemy engine/session
 │   ├── models.py        # ORM models (UploadedFile, Feature)
 │   ├── schemas.py       # Pydantic response models
@@ -157,27 +171,31 @@ geo-measure-api/
 │   └── services/
 │       ├── __init__.py
 │       ├── readers.py   # Shapefile/KML → GeoDataFrame (safe unzip)
-│       ├── crs.py       # UTM zone selection, reprojection
+│       ├── crs.py       # UTM zone selection, reprojection (shapely.transform)
 │       ├── measure.py   # Area/length logic per geometry type
 │       └── ingest.py    # Orchestration: read → measure → persist
 ├── tests/
 │   ├── __init__.py
-│   ├── conftest.py      # Shapefile fixtures
+│   ├── conftest.py      # DB fixtures, shapefile fixtures
 │   ├── test_measure.py  # Unit tests for measurement logic
 │   ├── test_api.py      # API integration tests
 │   └── data/
 │       └── sample.kml   # Sample KML for testing
+├── scripts/
+│   └── smoke_test.sh    # Docker CI smoke test
 ├── requirements.txt
-├── Dockerfile
+├── pyproject.toml       # pytest + ruff config
+├── Dockerfile           # Multi-stage, non-root, health check
+├── docker-compose.yml   # SQLite volume, optional PostGIS
 ├── .gitignore
 └── README.md
 ```
 
 ### File Processing Flow
-Upload → validate → stream to temp → safe unzip → read all layers → iterate features → persist → set status
+Upload → validate → stream to temp → safe unzip (`is_relative_to`) → read all layers → iterate features → persist → set status
 
 ### Measurement Flow
-Geometry type check → pick UTM from centroid → reproject → `.area` / `.length` → store
+Geometry type check → pick UTM from centroid → reproject (`shapely.transform`) → `.area` / `.length` → store
 
 ### CRS Handling
 - KML: assumed WGS84 (EPSG:4326)
@@ -185,6 +203,7 @@ Geometry type check → pick UTM from centroid → reproject → `.area` / `.len
 - Multi-shapefile zips: all shapefiles reprojected to the first shapefile's CRS before measurement
 - Measurements never in degrees; original geometry + CRS preserved in database
 - Invalid polygons repaired for measurement using `shapely.make_valid` (original stored unchanged)
+- Polar regions (lat ≥ 84° or ≤ -80°): polygon areas use EPSG:6933 (equal-area); line lengths use geodesic (WGS84)
 
 ## Design Decisions
 
@@ -213,6 +232,14 @@ Geometry type check → pick UTM from centroid → reproject → `.area` / `.len
 - A service-level `commit()` broke rollback-based test isolation
 - A Shapefile can't mix geometry types in one layer
 - Zip-slip and zip-bomb defenses
+
+## CI/CD
+- **GitHub Actions** (`.github/workflows/ci.yml`):
+  - `test` — pytest on Ubuntu 3.12
+  - `lint` — ruff check
+  - `docker-smoke` — builds image, runs container, uploads sample.kml, verifies measurements
+- **Concurrency control** — cancels in-progress runs on new pushes
+- **Docker multi-stage build** — smaller image, non-root user, health check
 
 ## Future Scope
 - Async processing with Celery/Redis plus a polling endpoint
