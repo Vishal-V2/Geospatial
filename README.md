@@ -3,7 +3,17 @@
 A FastAPI service that accepts a zipped Shapefile or a KML, extracts features, and returns area/length measurements computed in a suitable projected CRS.
 
 ## Stack
-- FastAPI · GeoPandas + pyogrio (GDAL) · Shapely 2 · pyproj · SQLAlchemy 2 + SQLite · pytest
+- **FastAPI** ≥0.110 — API framework, auto OpenAPI docs
+- **uvicorn[standard]** ≥0.29 — ASGI server
+- **python-multipart** ≥0.0.9 — multipart/form-data parsing
+- **GeoPandas** ≥0.14 + **pyogrio** ≥0.7 — Shapefile/KML reading (bundled GDAL)
+- **Shapely** ≥2.0 — geometry operations
+- **pyproj** ≥3.6 — CRS transformations
+- **SQLAlchemy** ≥2.0 + **SQLite** — ORM & storage (PostGIS-ready)
+- **pydantic-settings** ≥2.2 — environment-based config
+- **pytest** ≥8 + **httpx** ≥0.27 — testing
+
+Requires **Python 3.12+**
 
 ## Setup
 
@@ -30,7 +40,7 @@ docker run -p 8000:8000 geo-measure-api
 
 ### Tests
 ```bash
-pytest -q
+pytest -v
 ```
 
 ## API
@@ -56,7 +66,7 @@ Returns file metadata.
 ### GET `/api/files/{id}/measurements/?limit=100&offset=0`
 Returns paginated feature measurements.
 
-**Response:**
+**KML Response Example:**
 ```json
 {
   "file_id": "a1b2c3d4e5f6",
@@ -87,6 +97,31 @@ Returns paginated feature measurements.
 }
 ```
 
+**Shapefile Response Example** (layer = shapefile stem):
+```json
+{
+  "file_id": "b2c3d4e5f6a1",
+  "total": 2,
+  "limit": 100,
+  "offset": 0,
+  "results": [
+    {
+      "index": 0,
+      "layer": "test",
+      "geometry_type": "Polygon",
+      "geometry": {"type": "Polygon", "coordinates": [[[77.2, 28.6], "..."]]},
+      "crs": "EPSG:4326",
+      "properties": {"name": "Plot A"},
+      "measurement_supported": true,
+      "area_sq_m": 1089532.4,
+      "length_m": null,
+      "projected_crs": "EPSG:32643",
+      "note": null
+    }
+  ]
+}
+```
+
 ### Errors
 - `413` — File too large
 - `415` — Unsupported file type (only `.zip` and `.kml`)
@@ -96,19 +131,34 @@ Returns paginated feature measurements.
 ## Architecture
 
 ```
-app/
-├── main.py          # FastAPI app, routes
-├── config.py        # Pydantic settings
-├── db.py            # SQLAlchemy engine/session
-├── models.py        # ORM models (UploadedFile, Feature)
-├── schemas.py       # Pydantic response models
-├── api/
-│   └── files.py     # Upload, file info, measurements endpoints
-└── services/
-    ├── readers.py   # Shapefile/KML → GeoDataFrame (safe unzip)
-    ├── crs.py       # UTM zone selection, reprojection
-    ├── measure.py   # Area/length logic per geometry type
-    └── ingest.py    # Orchestration: read → measure → persist
+geo-measure-api/
+├── app/
+│   ├── __init__.py
+│   ├── main.py          # FastAPI app, routes
+│   ├── config.py        # Pydantic settings
+│   ├── db.py            # SQLAlchemy engine/session
+│   ├── models.py        # ORM models (UploadedFile, Feature)
+│   ├── schemas.py       # Pydantic response models
+│   ├── api/
+│   │   ├── __init__.py
+│   │   └── files.py     # Upload, file info, measurements endpoints
+│   └── services/
+│       ├── __init__.py
+│       ├── readers.py   # Shapefile/KML → GeoDataFrame (safe unzip)
+│       ├── crs.py       # UTM zone selection, reprojection
+│       ├── measure.py   # Area/length logic per geometry type
+│       └── ingest.py    # Orchestration: read → measure → persist
+├── tests/
+│   ├── __init__.py
+│   ├── conftest.py      # Shapefile fixtures
+│   ├── test_measure.py  # Unit tests for measurement logic
+│   ├── test_api.py      # API integration tests
+│   └── data/
+│       └── sample.kml   # Sample KML for testing
+├── requirements.txt
+├── Dockerfile
+├── .gitignore
+└── README.md
 ```
 
 ### File Processing Flow
@@ -124,15 +174,15 @@ Geometry type check → pick UTM from centroid → reproject → `.area` / `.len
 
 ## Design Decisions
 
-| Decision | Why |
-|----------|-----|
-| FastAPI | Light, typed, auto docs |
-| pyogrio/GeoPandas | One API for both formats, bundled GDAL |
-| Per-feature UTM | 3857 distorts area; per-feature keeps accuracy |
-| Sync + status | Simple, async-ready |
-| SQLite + JSON | Zero setup, swap to PostGIS later |
-| Reject no `.prj` | Silent guessing = wrong measurements |
-| Store GeoJSON in source CRS | Preserves user data |
+| Decision | Alternatives Considered | Why |
+|----------|------------------------|-----|
+| FastAPI | Django + DRF | Lighter, typed schemas, built-in docs |
+| pyogrio/GeoPandas | fiona, `fastkml`, `pyshp` | One API for both formats, faster, bundled GDAL |
+| Per-feature UTM | One CRS per file, EPSG:3857, geodesic | 3857 distorts area. Per-feature keeps accuracy for mixed-region files |
+| Sync processing + status | Celery/RQ | Simpler for the scope, and the status field makes the move to async easy |
+| SQLite + JSON columns | PostGIS | Zero setup. Swap the URL for Postgres later |
+| Reject Shapefiles with no `.prj` | Assume 4326 | Silent guessing gives wrong measurements |
+| Store GeoJSON in the source CRS | Store reprojected | Preserves the user's data |
 
 ## Limitations
 - Geometries spanning multiple UTM zones lose accuracy
@@ -141,9 +191,10 @@ Geometry type check → pick UTM from centroid → reproject → `.area` / `.len
 - No auth/rate limiting
 
 ## Future Scope
-- Async processing with Celery/Redis
-- Geodesic measurements via `pyproj.Geod`
-- PostGIS with spatial queries
+- Async processing with Celery/Redis plus a polling endpoint
+- Geodesic measurements using `pyproj.Geod` for comparison or large features
+- PostGIS storage with spatial queries
+- Perimeter for polygons, and unit conversion (`?units=ha|acre|km`)
 - More formats (GeoJSON, GPKG, KMZ)
-- Auth, rate limiting, S3 uploads
-- CI/CD pipeline
+- Authentication, rate limiting, and object storage (S3) for uploads
+- Pagination via cursors, CSV/GeoJSON export, and a CI pipeline (GitHub Actions)
