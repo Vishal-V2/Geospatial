@@ -23,3 +23,28 @@ def test_rejects_bad_extension():
 
 def test_404():
     assert client.get("/api/files/nope/").status_code == 404
+
+
+def test_shapefile_upload(valid_shapefile_zip: bytes):
+    r = client.post("/api/files/", files={"file": ("test.zip", valid_shapefile_zip)})
+    assert r.status_code == 201
+    data = r.json()
+    assert data["status"] == "COMPLETED"
+    assert data["feature_count"] == 2
+
+    fid = data["id"]
+    res = client.get(f"/api/files/{fid}/measurements/").json()["results"]
+    types = {x["geometry_type"] for x in res}
+    assert types == {"Polygon"}
+
+    for poly in res:
+        assert poly["measurement_supported"] is True
+        assert poly["area_sq_m"] is not None
+        assert 1.0e6 < poly["area_sq_m"] < 1.3e6
+
+
+def test_shapefile_missing_prj(invalid_shapefile_zip: bytes):
+    r = client.post("/api/files/", files={"file": ("test.zip", invalid_shapefile_zip)})
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    assert ".prj" in detail or "CRS" in detail or "crs" in detail.lower()
