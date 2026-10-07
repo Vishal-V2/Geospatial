@@ -6,60 +6,24 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: "pip"
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gdal-bin libgdal-dev
-
-      - name: Install Python dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Run tests
-        run: pytest -v
-
-      - name: Check Docker build
-        run: docker build -t geo-measure-api .
-
-      - name: Run Docker container test
-        run: |
-          docker run -d --name test-api -p 8000:8000 geo-measure-api
-          # Wait for API to be ready
-          for i in {1..30}; do
-            curl -sf http://localhost:8000/health && break
-            sleep 1
-          done
-          # Upload sample.kml and verify
-          resp=$(curl -s -F "file=@tests/data/sample.kml" http://localhost:8000/api/files/)
-          fid=$(echo "$resp" | python3 -c "import sys, json; print(json.load(sys.stdin)['id'])")
-          status=$(echo "$resp" | python3 -c "import sys, json; print(json.load(sys.stdin)['status'])")
-          feat=$(echo "$resp" | python3 -c "import sys, json; print(json.load(sys.stdin)['feature_count'])")
-          test "$status" = "COMPLETED"
-          test "$feat" = "3"
-          # Verify measurements
-          curl -sf "http://localhost:8000/api/files/$fid/measurements/" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-poly = next(x for x in data['results'] if x['geometry_type'] == 'Polygon')
-assert poly['area_sq_m'] > 0, f'Polygon area should be positive: {poly}'
-"
-          docker stop test-api
-          docker rm test-api
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: pytest -v
 
   lint:
     runs-on: ubuntu-latest
@@ -68,8 +32,37 @@ assert poly['area_sq_m'] > 0, f'Polygon area should be positive: {poly}'
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: "pip"
-      - name: Install ruff
-        run: pip install ruff
-      - name: Run ruff
-        run: ruff check app tests
+      - run: pip install ruff
+      - run: ruff check app tests
+
+  docker-smoke:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t geo-measure-api .
+
+      - name: Start container
+        run: docker run -d --name test-api -p 8000:8000 geo-measure-api
+
+      - name: Wait for API
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8000/health && exit 0
+            sleep 1
+          done
+          echo "API did not become healthy in 30s" >&2
+          exit 1
+
+      - name: Smoke test (KML upload)
+        run: bash scripts/smoke_test.sh
+
+      - name: Container logs
+        if: always()
+        run: docker logs test-api
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f test-api
