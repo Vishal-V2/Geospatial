@@ -39,8 +39,25 @@ jobs:
       - name: Run Docker container test
         run: |
           docker run -d --name test-api -p 8000:8000 geo-measure-api
-          sleep 5
-          curl -f http://localhost:8000/health
+          # Wait for API to be ready
+          for i in {1..30}; do
+            curl -sf http://localhost:8000/health && break
+            sleep 1
+          done
+          # Upload sample.kml and verify
+          resp=$(curl -s -F "file=@tests/data/sample.kml" http://localhost:8000/api/files/)
+          fid=$(echo "$resp" | python3 -c "import sys, json; print(json.load(sys.stdin)['id'])")
+          status=$(echo "$resp" | python3 -c "import sys, json; print(json.load(sys.stdin)['status'])")
+          feat=$(echo "$resp" | python3 -c "import sys, json; print(json.load(sys.stdin)['feature_count'])")
+          test "$status" = "COMPLETED"
+          test "$feat" = "3"
+          # Verify measurements
+          curl -sf "http://localhost:8000/api/files/$fid/measurements/" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+poly = next(x for x in data['results'] if x['geometry_type'] == 'Polygon')
+assert poly['area_sq_m'] > 0, f'Polygon area should be positive: {poly}'
+"
           docker stop test-api
           docker rm test-api
 

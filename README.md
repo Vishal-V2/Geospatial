@@ -48,7 +48,7 @@ pytest -v
 ### POST `/api/files/`
 Upload a `.zip` (Shapefile) or `.kml` file.
 
-**Response (201):**
+**Response (201) — Success:**
 ```json
 {
   "id": "a1b2c3d4e5f6",
@@ -57,6 +57,18 @@ Upload a `.zip` (Shapefile) or `.kml` file.
   "crs": "EPSG:4326",
   "status": "COMPLETED",
   "error": null
+}
+```
+
+**Response (201) — Processing Failed:**
+```json
+{
+  "id": "a1b2c3d4e5f6",
+  "filename": "bad.zip",
+  "feature_count": 0,
+  "crs": null,
+  "status": "FAILED",
+  "error": "Zip does not contain a .shp file."
 }
 ```
 
@@ -193,6 +205,15 @@ Geometry type check → pick UTM from centroid → reproject → `.area` / `.len
 - No auth/rate limiting
 - Zip size limit based on declared header sizes (can be spoofed)
 
+## Learnings
+- KML folders arrive as multiple GDAL layers
+- A missing `.prj` means an unknown CRS, so rejecting it is safer than guessing
+- UTM isn't equal-area, but the error is tiny inside a zone (verified against Geod within 0.5%)
+- `make_valid` can change a geometry's type, so you must re-check the result
+- A service-level `commit()` broke rollback-based test isolation
+- A Shapefile can't mix geometry types in one layer
+- Zip-slip and zip-bomb defenses
+
 ## Future Scope
 - Async processing with Celery/Redis plus a polling endpoint
 - Geodesic measurements using `pyproj.Geod` for comparison or large features
@@ -200,4 +221,4 @@ Geometry type check → pick UTM from centroid → reproject → `.area` / `.len
 - Perimeter for polygons, and unit conversion (`?units=ha|acre|km`)
 - More formats (GeoJSON, GPKG, KMZ)
 - Authentication, rate limiting, and object storage (S3) for uploads
-- Pagination via cursors, CSV/GeoJSON export, and a CI pipeline (GitHub Actions)
+- Pagination via cursors, CSV/GeoJSON export
