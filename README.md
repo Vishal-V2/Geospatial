@@ -126,7 +126,7 @@ Returns paginated feature measurements.
 - `413` — File too large
 - `415` — Unsupported file type (only `.zip` and `.kml`)
 - `404` — File not found
-- `422` — Corrupt file, missing `.shp`/`.prj`, or processing error
+- `201` with `status: "FAILED"` — Processing error (corrupt file, missing `.shp`/`.prj`, etc.); response body includes `id` and `error` message
 
 ## Architecture
 
@@ -170,7 +170,9 @@ Geometry type check → pick UTM from centroid → reproject → `.area` / `.len
 ### CRS Handling
 - KML: assumed WGS84 (EPSG:4326)
 - Shapefile: CRS from `.prj`; missing `.prj` rejected
-- Measurements never in degrees; original geometry + CRS preserved
+- Multi-shapefile zips: all shapefiles reprojected to the first shapefile's CRS before measurement
+- Measurements never in degrees; original geometry + CRS preserved in database
+- Invalid polygons repaired for measurement using `shapely.make_valid` (original stored unchanged)
 
 ## Design Decisions
 
@@ -186,9 +188,10 @@ Geometry type check → pick UTM from centroid → reproject → `.area` / `.len
 
 ## Limitations
 - Geometries spanning multiple UTM zones lose accuracy
-- Polar regions use EPSG:6933 fallback
+- Polar regions (lat ≥ 84° or ≤ -80°): polygon areas use EPSG:6933 (equal-area); line lengths use geodesic (WGS84) for accuracy
 - Z values ignored
 - No auth/rate limiting
+- Zip size limit based on declared header sizes (can be spoofed)
 
 ## Future Scope
 - Async processing with Celery/Redis plus a polling endpoint

@@ -19,7 +19,7 @@ def safe_extract(zip_path: Path, dest: Path) -> None:
                 raise FileProcessingError("Zip contents exceed the allowed size.")
             for member in zf.infolist():
                 target = (dest / member.filename).resolve()
-                if not str(target).startswith(str(dest.resolve())):
+                if not target.is_relative_to(dest.resolve()):
                     raise FileProcessingError("Zip contains unsafe paths.")
             zf.extractall(dest)
     except zipfile.BadZipFile:

@@ -35,8 +35,6 @@ def upload(file: UploadFile = File(...), db: Session = Depends(get_db)):
         db.commit()
         record = process_file(db, record, path)
 
-    if record.status == "FAILED":
-        raise HTTPException(422, record.error)
     return record
 
 
@@ -57,10 +55,37 @@ def measurements(
     file_id: str,
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
+    include_geometry: bool = Query(True, description="Include geometry in response"),
     db: Session = Depends(get_db),
 ):
     _get_or_404(db, file_id)
     q = select(Feature).where(Feature.file_id == file_id).order_by(Feature.index)
     total = db.scalar(select(func.count()).select_from(q.subquery()))
     rows = db.scalars(q.limit(limit).offset(offset)).all()
+
+    if not include_geometry:
+        # Create response without geometry to reduce payload
+        results = []
+        for row in rows:
+            results.append({
+                "index": row.index,
+                "layer": row.layer,
+                "geometry_type": row.geometry_type,
+                "geometry": None,
+                "crs": row.crs,
+                "properties": row.properties,
+                "measurement_supported": row.measurement_supported,
+                "area_sq_m": row.area_sq_m,
+                "length_m": row.length_m,
+                "projected_crs": row.projected_crs,
+                "note": row.note,
+            })
+        return MeasurementsResponse(
+            file_id=file_id,
+            total=total,
+            limit=limit,
+            offset=offset,
+            results=results,
+        )
+
     return MeasurementsResponse(file_id=file_id, total=total, limit=limit, offset=offset, results=rows)

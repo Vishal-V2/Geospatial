@@ -1,9 +1,11 @@
 from functools import lru_cache
-from pyproj import CRS, Transformer
+from pyproj import CRS, Transformer, Geod
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform
 
 EQUAL_AREA_FALLBACK = 6933
+
+GEOD = Geod(ellps="WGS84")
 
 
 @lru_cache(maxsize=256)
@@ -27,3 +29,18 @@ def pick_projected_crs(geom: BaseGeometry, src_crs: CRS | str) -> int:
     wgs = reproject(geom, src_crs, 4326)
     c = wgs.centroid
     return utm_epsg(c.x, c.y)
+
+
+def geodesic_length_m(geom: BaseGeometry, src_crs: CRS | str) -> float:
+    """Compute length in meters using geodesic (for polar regions)."""
+    wgs = reproject(geom, src_crs, 4326)
+    if wgs.geom_type == "LineString":
+        lons, lats = zip(*wgs.coords)
+        return GEOD.line_length(lons, lats)
+    elif wgs.geom_type == "MultiLineString":
+        total = 0.0
+        for line in wgs.geoms:
+            lons, lats = zip(*line.coords)
+            total += GEOD.line_length(lons, lats)
+        return total
+    raise ValueError("Not a LineString/MultiLineString")

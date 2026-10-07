@@ -45,6 +45,15 @@ def test_shapefile_upload(valid_shapefile_zip: bytes):
 
 def test_shapefile_missing_prj(invalid_shapefile_zip: bytes):
     r = client.post("/api/files/", files={"file": ("test.zip", invalid_shapefile_zip)})
-    assert r.status_code == 422
-    detail = r.json()["detail"]
-    assert ".prj" in detail or "CRS" in detail or "crs" in detail.lower()
+    assert r.status_code == 201
+    data = r.json()
+    assert data["status"] == "FAILED"
+    assert data["id"] is not None
+    assert data["error"] is not None
+    assert ".prj" in data["error"] or "CRS" in data["error"] or "crs" in data["error"].lower()
+
+    # Verify we can retrieve the failed record
+    fid = data["id"]
+    r2 = client.get(f"/api/files/{fid}/")
+    assert r2.status_code == 200
+    assert r2.json()["status"] == "FAILED"

@@ -1,8 +1,66 @@
-import zipfile
+import os
+import tempfile
 from pathlib import Path
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+
+# Set test database URL BEFORE importing app modules
+os.environ["GEO_DATABASE_URL"] = "sqlite:///"
+
+
+@pytest.fixture(scope="session")
+def test_db_path():
+    """Session-scoped temp SQLite file."""
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    yield path
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+@pytest.fixture(scope="session")
+def test_engine(test_db_path):
+    engine = create_engine(
+        f"sqlite:///{test_db_path}",
+        connect_args={"check_same_thread": False},
+    )
+    from app.db import Base
+    Base.metadata.create_all(engine)
+    yield engine
+    engine.dispose()
+
+
+@pytest.fixture(scope="function")
+def test_db(test_engine):
+    """Fresh session per test, rolls back after."""
+    SessionLocal = sessionmaker(bind=test_engine, autoflush=False)
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.rollback()
+        db.close()
+
+
+@pytest.fixture(autouse=True)
+def override_get_db(test_db):
+    """Override FastAPI's get_db dependency for all tests."""
+    from app.main import app
+    from app.db import get_db
+    app.dependency_overrides[get_db] = lambda: test_db
+    yield
+    app.dependency_overrides.clear()
+
+
+# ---- Shapefile fixtures ----
+
+import zipfile
 import geopandas as gpd
 from shapely.geometry import Polygon, LineString
-import pytest
 
 
 @pytest.fixture
