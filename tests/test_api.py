@@ -43,6 +43,10 @@ def test_shapefile_upload(valid_shapefile_zip: bytes):
         assert 1.0e6 < poly["area_sq_m"] < 1.3e6
 
 
+import pytest
+
+
+@pytest.mark.filterwarnings("ignore:'crs' was not provided")
 def test_shapefile_missing_prj(invalid_shapefile_zip: bytes):
     r = client.post("/api/files/", files={"file": ("test.zip", invalid_shapefile_zip)})
     assert r.status_code == 201

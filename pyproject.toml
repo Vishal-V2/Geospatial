@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::DeprecationWarning:starlette.testclient",
+    "ignore::starlette.exceptions.StarletteDeprecationWarning",
+]

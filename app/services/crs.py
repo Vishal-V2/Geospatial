@@ -1,7 +1,8 @@
 from functools import lru_cache
+import numpy as np
 from pyproj import CRS, Transformer, Geod
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import transform
+import shapely
 
 EQUAL_AREA_FALLBACK = 6933
 
@@ -15,7 +16,15 @@ def _transformer(src: str, dst: str) -> Transformer:
 
 def reproject(geom: BaseGeometry, src: CRS | str, dst: CRS | str | int) -> BaseGeometry:
     src, dst = CRS.from_user_input(src).to_string(), CRS.from_user_input(dst).to_string()
-    return geom if src == dst else transform(_transformer(src, dst).transform, geom)
+    if src == dst:
+        return geom
+    t = _transformer(src, dst)
+
+    def _apply(coords: np.ndarray) -> np.ndarray:
+        x, y = t.transform(coords[:, 0], coords[:, 1])
+        return np.column_stack([x, y])
+
+    return shapely.transform(geom, _apply)
 
 
 def utm_epsg(lon: float, lat: float) -> int:
