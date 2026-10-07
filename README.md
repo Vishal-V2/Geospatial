@@ -20,7 +20,7 @@ Requires **Python 3.12+**
 
 ```bash
 git clone <repo-url>
-cd geo-measure-api
+cd Geospatial
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload
