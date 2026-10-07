@@ -1,7 +1,7 @@
-import pytest
-from shapely.geometry import Polygon, LineString, Point, GeometryCollection
-from app.services.measure import measure_geometry
+from shapely.geometry import GeometryCollection, LineString, Point, Polygon
+
 from app.services.crs import utm_epsg
+from app.services.measure import measure_geometry
 
 
 def test_utm_zone_selection():

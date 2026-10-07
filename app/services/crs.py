@@ -1,8 +1,9 @@
 from functools import lru_cache
+
 import numpy as np
-from pyproj import CRS, Transformer, Geod
-from shapely.geometry.base import BaseGeometry
 import shapely
+from pyproj import CRS, Geod, Transformer
+from shapely.geometry.base import BaseGeometry
 
 EQUAL_AREA_FALLBACK = 6933
 

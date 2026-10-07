@@ -1,11 +1,13 @@
 import json
 import tempfile
 from pathlib import Path
+
 from sqlalchemy.orm import Session
-from ..models import UploadedFile, Feature
+
 from ..config import settings
-from .readers import read_geofile, FileProcessingError
+from ..models import Feature, UploadedFile
 from .measure import measure_geometry
+from .readers import FileProcessingError, read_geofile
 
 
 def process_file(db: Session, record: UploadedFile, saved_path: Path) -> UploadedFile:
@@ -36,7 +38,7 @@ def process_file(db: Session, record: UploadedFile, saved_path: Path) -> Uploade
         record.crs, record.feature_count, record.status = crs_label, len(rows), "COMPLETED"
     except FileProcessingError as e:
         record.status, record.error = "FAILED", str(e)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - catch-all to prevent service crash
         record.status, record.error = "FAILED", f"Could not read file: {e}"
     db.commit()
     db.refresh(record)

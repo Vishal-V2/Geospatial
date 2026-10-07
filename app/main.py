@@ -1,6 +1,7 @@
 from fastapi import FastAPI
-from .db import Base, engine
+
 from .api import files
+from .db import Base, engine
 
 Base.metadata.create_all(engine)
 app = FastAPI(title="Geospatial File Measurement API", version="1.0.0")

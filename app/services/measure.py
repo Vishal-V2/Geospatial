@@ -1,8 +1,10 @@
 from dataclasses import dataclass
-from shapely.geometry.base import BaseGeometry
-from shapely import is_valid, make_valid
+
 from pyproj import CRS
-from .crs import pick_projected_crs, reproject, geodesic_length_m, EQUAL_AREA_FALLBACK
+from shapely import is_valid, make_valid
+from shapely.geometry.base import BaseGeometry
+
+from .crs import EQUAL_AREA_FALLBACK, geodesic_length_m, pick_projected_crs, reproject
 
 AREA_TYPES = {"Polygon", "MultiPolygon"}
 LENGTH_TYPES = {"LineString", "MultiLineString"}
@@ -48,7 +50,7 @@ def measure_geometry(geom: BaseGeometry | None, src_crs: CRS | str) -> Measureme
     try:
         epsg = pick_projected_crs(geom, src_crs)
         projected = reproject(geom, src_crs, epsg)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - catch-all for reprojection safety
         return Measurement(False, note=f"Reprojection failed: {exc}")
 
     label = f"EPSG:{epsg}"

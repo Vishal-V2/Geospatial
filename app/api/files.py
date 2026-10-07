@@ -1,12 +1,13 @@
-import shutil
 import tempfile
 from pathlib import Path
+
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
-from ..db import get_db
+
 from ..config import settings
-from ..models import UploadedFile, Feature
+from ..db import get_db
+from ..models import Feature, UploadedFile
 from ..schemas import FileOut, MeasurementsResponse
 from ..services.ingest import process_file
 
@@ -15,7 +16,7 @@ ALLOWED = {".zip", ".kml"}
 
 
 @router.post("/", response_model=FileOut, status_code=201)
-def upload(file: UploadFile = File(...), db: Session = Depends(get_db)):
+def upload(file: UploadFile = File(...), db: Session = Depends(get_db)):  # noqa: B008
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED:
         raise HTTPException(415, "Only .zip (Shapefile) and .kml are supported.")
@@ -46,7 +47,7 @@ def _get_or_404(db: Session, file_id: str) -> UploadedFile:
 
 
 @router.get("/{file_id}/", response_model=FileOut)
-def file_info(file_id: str, db: Session = Depends(get_db)):
+def file_info(file_id: str, db: Session = Depends(get_db)):  # noqa: B008
     return _get_or_404(db, file_id)
 
 
@@ -56,7 +57,7 @@ def measurements(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     include_geometry: bool = Query(True, description="Include geometry in response"),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db),  # noqa: B008
 ):
     _get_or_404(db, file_id)
     q = select(Feature).where(Feature.file_id == file_id).order_by(Feature.index)

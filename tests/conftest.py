@@ -1,6 +1,7 @@
 import os
 import tempfile
 from pathlib import Path
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -11,7 +12,7 @@ os.environ["GEO_DATABASE_URL"] = "sqlite:///"
 
 # ---- Database fixtures ----
 
-from app.db import Base, engine
+from app.db import Base
 
 
 @pytest.fixture(scope="session")
@@ -43,8 +44,8 @@ def clean_db(test_engine):
 @pytest.fixture(autouse=True)
 def override_get_db(test_engine):
     """Override FastAPI's get_db dependency for all tests."""
-    from app.main import app
     from app.db import get_db
+    from app.main import app
     
     SessionLocal = sessionmaker(bind=test_engine, autoflush=False)
     
@@ -63,8 +64,9 @@ def override_get_db(test_engine):
 # ---- Shapefile fixtures ----
 
 import zipfile
+
 import geopandas as gpd
-from shapely.geometry import Polygon, LineString, Point
+from shapely.geometry import LineString, Point, Polygon
 
 
 @pytest.fixture
