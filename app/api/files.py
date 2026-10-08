@@ -56,16 +56,18 @@ def measurements(
     file_id: str,
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-    include_geometry: bool = Query(True, description="Include geometry in response"),
+    include_geometry: bool = Query(True, description="Set to false to omit geometry; the geometry field will be null"),
     db: Session = Depends(get_db),  # noqa: B008
 ):
-    _get_or_404(db, file_id)
+    file_rec = _get_or_404(db, file_id)
+    if file_rec.status != "COMPLETED":
+        raise HTTPException(409, f"File status is {file_rec.status}: {file_rec.error or 'processing not complete'}")
+
     q = select(Feature).where(Feature.file_id == file_id).order_by(Feature.index)
     total = db.scalar(select(func.count()).select_from(q.subquery()))
     rows = db.scalars(q.limit(limit).offset(offset)).all()
 
     if not include_geometry:
-        # Create response without geometry to reduce payload
         results = []
         for row in rows:
             results.append({
