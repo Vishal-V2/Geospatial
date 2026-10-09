@@ -2,9 +2,11 @@
 
 # Geospatial File Measurement API
 
-A FastAPI service that accepts a zipped Shapefile or a KML, extracts features, and returns area/length measurements computed in a suitable projected CRS.
+A FastAPI service that accepts a zipped Shapefile or a KML, extracts every feature, and returns area/length
+measurements computed in a suitable projected CRS (never in degrees).
 
 ## Stack
+
 - **FastAPI** ≥0.110 — API framework, auto OpenAPI docs
 - **uvicorn[standard]** ≥0.29 — ASGI server
 - **python-multipart** ≥0.0.9 — multipart/form-data parsing
@@ -16,7 +18,7 @@ A FastAPI service that accepts a zipped Shapefile or a KML, extracts features, a
 - **pytest** ≥8 + **httpx** ≥0.27 — testing
 - **ruff** — linting (CI)
 
-Requires **Python 3.12+**
+Requires **Python 3.12+**.
 
 ## Setup
 
@@ -46,6 +48,25 @@ pytest
 ruff check app tests
 ```
 
+### Try it with the sample files
+
+The `samples/` folder holds small inputs covering normal and edge cases (see [`samples/README.md`](samples/README.md)).
+Every example below uses them, run from the repository root:
+
+```bash
+curl -F "file=@samples/01_polygons_only.zip" http://127.0.0.1:8000/api/files/
+```
+
+## Configuration
+
+| Environment variable | Default | Description |
+|---|---|---|
+| `GEO_DATABASE_URL` | `sqlite:///./geo.db` | Database connection string |
+| `GEO_MAX_UPLOAD_MB` | `50` | Max upload size (`413` if exceeded) |
+| `GEO_MAX_UNZIPPED_MB` | `300` | Max unzipped contents size |
+| `GEO_MAX_FEATURES` | `100000` | Max features per upload |
+<!-- VERIFY these defaults against app/config.py, and state what happens when GEO_MAX_FEATURES is exceeded -->
+
 ## API
 
 | Method | Path | Description |
@@ -62,12 +83,24 @@ ruff check app tests
 | `COMPLETED` | All features extracted and measured where supported |
 | `FAILED` | Processing failed; see `error` |
 
-**A `201` response does not mean success.** Always check `status`. Failed uploads still return an `id` so the record (and its error) can be retrieved later. Real 4xx errors are returned only for `415` (unsupported extension) and `413` (file too large).
+**A `201` response does not mean success.** Always check `status`. Failed uploads still return an `id` so the record
+(and its error) can be retrieved later.
+
+### Error codes
+
+| Code | When |
+|---|---|
+| 201 | Upload accepted (check `status`; processing may have failed) |
+| 404 | Unknown file id |
+| 409 | Measurements requested for a `FAILED` or `PROCESSING` file |
+| 413 | Upload too large |
+| 415 | Unsupported file extension |
+| 422 | Invalid query parameters (e.g. bad `limit` or `offset`) |
 
 ### Upload
 
 ```bash
-curl -F "file=@01_polygons_only.zip" http://127.0.0.1:8000/api/files/
+curl -F "file=@samples/01_polygons_only.zip" http://127.0.0.1:8000/api/files/
 ```
 
 ```json
@@ -87,16 +120,7 @@ curl -F "file=@01_polygons_only.zip" http://127.0.0.1:8000/api/files/
 curl http://127.0.0.1:8000/api/files/a48d75a474dd/
 ```
 
-```json
-{
-  "id": "a48d75a474dd",
-  "filename": "01_polygons_only.zip",
-  "feature_count": 2,
-  "crs": "EPSG:4326",
-  "status": "COMPLETED",
-  "error": null
-}
-```
+Returns the same shape as the upload response.
 
 ### Measurements
 
@@ -117,7 +141,7 @@ curl http://127.0.0.1:8000/api/files/a48d75a474dd/measurements/
       "geometry_type": "Polygon",
       "geometry": {
         "type": "Polygon",
-        "coordinates": [[[10.0, 50.0], [10.0, 50.00899], [10.01395, 50.00899], [10.01395, 50.0], [10.0, 50.0]]]
+        "coordinates": [[[10.0, 50.0], [10.0, 50.00899044894598], [10.013947827283664, 50.00899044894598], [10.013947827283664, 50.00000000000001], [10.0, 50.0]]]
       },
       "crs": "EPSG:4326",
       "properties": { "name": "Parcel A", "owner": "Alice", "zone": 1 },
@@ -126,12 +150,40 @@ curl http://127.0.0.1:8000/api/files/a48d75a474dd/measurements/
       "length_m": null,
       "projected_crs": "EPSG:32632",
       "note": null
+    },
+    {
+      "index": 1,
+      "layer": "parcels",
+      "geometry_type": "Polygon",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[10.05, 50.0], [10.05, 50.00449522622365], [10.056973913702462, 50.00449522622365], [10.056973913702462, 50.00000000000001], [10.05, 50.0]]]
+      },
+      "crs": "EPSG:4326",
+      "properties": { "name": "Parcel B", "owner": "Bob", "zone": 2 },
+      "measurement_supported": true,
+      "area_sq_m": 249823.37930830033,
+      "length_m": null,
+      "projected_crs": "EPSG:32632",
+      "note": null
     }
   ]
 }
 ```
 
-(Second feature and full-precision coordinates omitted here for brevity.)
+Each result contains:
+
+| Field | Meaning |
+|---|---|
+| `index` | Feature position within the file |
+| `layer` | Source layer (shapefile name, or KML folder/document) |
+| `geometry_type`, `geometry` | GeoJSON-style geometry as stored |
+| `crs` | CRS of the stored geometry |
+| `properties` | Feature attributes |
+| `measurement_supported` | `false` for types without a defined measurement |
+| `area_sq_m` / `length_m` | Polygons get an area, lines get a length, everything else gets `null` |
+| `projected_crs` | CRS used for the measurement (`null` if not measured) |
+| `note` | Explains repairs or why a feature was not measured |
 
 **Query parameters**
 
@@ -164,6 +216,19 @@ curl "http://127.0.0.1:8000/api/files/a48d75a474dd/measurements/?include_geometr
       "length_m": null,
       "projected_crs": "EPSG:32632",
       "note": null
+    },
+    {
+      "index": 1,
+      "layer": "parcels",
+      "geometry_type": "Polygon",
+      "geometry": null,
+      "crs": "EPSG:4326",
+      "properties": { "name": "Parcel B", "owner": "Bob", "zone": 2 },
+      "measurement_supported": true,
+      "area_sq_m": 249823.37930830033,
+      "length_m": null,
+      "projected_crs": "EPSG:32632",
+      "note": null
     }
   ]
 }
@@ -171,16 +236,68 @@ curl "http://127.0.0.1:8000/api/files/a48d75a474dd/measurements/?include_geometr
 
 ### Mixed geometry (polygon + line + point)
 
-Points are returned but not measured.
+A zip can hold several shapefiles, one per geometry type. Polygons get an area, lines a length, and points are
+returned but not measured.
+
+```bash
+curl -F "file=@samples/03_mixed_geometry.zip" http://127.0.0.1:8000/api/files/
+```
+
+The three results (polygon shortened here; its full form is shown above):
+
+```json
+[
+  {
+    "index": 0,
+    "layer": "parcels",
+    "geometry_type": "Polygon",
+    "properties": { "name": "Parcel A" },
+    "measurement_supported": true,
+    "area_sq_m": 999234.8163098362,
+    "length_m": null,
+    "projected_crs": "EPSG:32632",
+    "note": null
+  },
+  {
+    "index": 1,
+    "layer": "roads",
+    "geometry_type": "LineString",
+    "geometry": { "type": "LineString", "coordinates": [[10.0, 50.02], [10.041860846312927, 50.02]] },
+    "properties": { "name": "Road 1" },
+    "measurement_supported": true,
+    "area_sq_m": null,
+    "length_m": 2998.9967544606916,
+    "projected_crs": "EPSG:32632",
+    "note": null
+  },
+  {
+    "index": 2,
+    "layer": "sites",
+    "geometry_type": "Point",
+    "geometry": { "type": "Point", "coordinates": [10.01, 50.01] },
+    "properties": { "name": "Site 1" },
+    "measurement_supported": false,
+    "area_sq_m": null,
+    "length_m": null,
+    "projected_crs": null,
+    "note": "No measurement defined for points."
+  }
+]
+```
+
+### Unsupported geometry (handled, not a crash)
+
+`samples/04_points_only_unsupported.zip` contains only MultiPoints. The upload completes and each feature is
+returned with a note instead of a measurement:
 
 ```json
 {
-  "index": 2,
+  "index": 0,
   "layer": "sites",
-  "geometry_type": "Point",
-  "geometry": { "type": "Point", "coordinates": [10.01, 50.01] },
+  "geometry_type": "MultiPoint",
+  "geometry": { "type": "MultiPoint", "coordinates": [[10.0, 50.0], [10.001, 50.001]] },
   "crs": "EPSG:4326",
-  "properties": { "name": "Site 1" },
+  "properties": { "name": "Cluster 1" },
   "measurement_supported": false,
   "area_sq_m": null,
   "length_m": null,
@@ -189,10 +306,81 @@ Points are returned but not measured.
 }
 ```
 
-### Failed upload (different ID from the success example)
+A KML placemark that mixes geometry types (`samples/13_kml_multigeometry_mixed.kml`) is returned as a
+`GeometryCollection` with `measurement_supported: false` and the note
+`"Unsupported geometry type: GeometryCollection."`.
+
+### Invalid polygon (repaired for measurement)
+
+`samples/05_invalid_polygon.zip` contains a self-intersecting "bowtie". It is measured on a repaired copy; the stored
+geometry is unchanged and a note is added:
+
+```json
+{
+  "index": 0,
+  "layer": "bad",
+  "geometry_type": "Polygon",
+  "geometry": { "type": "Polygon", "coordinates": [[[10.1, 50.0], [10.11, 50.01], [10.11, 50.0], [10.1, 50.01], [10.1, 50.0]]] },
+  "crs": "EPSG:4326",
+  "properties": { "name": "Bowtie (invalid)" },
+  "measurement_supported": true,
+  "area_sq_m": 398434.05961789377,
+  "length_m": null,
+  "projected_crs": "EPSG:32632",
+  "note": "Geometry was invalid; repaired for measurement."
+}
+```
+
+### KML input
 
 ```bash
-curl -i -F "file=@06_no_prj_should_fail.zip" http://127.0.0.1:8000/api/files/
+curl -F "file=@samples/11_sample_mixed.kml" http://127.0.0.1:8000/api/files/
+```
+
+```json
+{
+  "id": "41585d9b55c7",
+  "filename": "11_sample_mixed.kml",
+  "feature_count": 5,
+  "crs": "EPSG:4326",
+  "status": "COMPLETED",
+  "error": null
+}
+```
+
+Each KML folder becomes a layer (`Parcels`, `Roads`, `Sites`). One result:
+
+```json
+{
+  "index": 2,
+  "layer": "Roads",
+  "geometry_type": "LineString",
+  "geometry": { "type": "LineString", "coordinates": [[10.0, 50.02, 0.0], [10.0418608, 50.02, 0.0]] },
+  "crs": "EPSG:4326",
+  "properties": { "Name": "Road 1", "description": "~3 km east-west" },
+  "measurement_supported": true,
+  "area_sq_m": null,
+  "length_m": 2998.9934364989,
+  "projected_crs": "EPSG:32632",
+  "note": null
+}
+```
+<!-- VERIFY: re-run 11_sample_mixed.kml and paste the real properties; the boilerplate filter was added after the last run -->
+
+Notes on KML input:
+
+- GDAL's KML driver adds boilerplate keys to every feature (`tessellate`, `extrude`, `visibility`, `drawOrder`,
+  `altitudeMode`, `icon`, `timestamp`, `begin`, `end`, `id`). These are removed; real attributes are kept.
+- Property names come from the driver (`Name`, `description`), so their casing differs from Shapefile attributes.
+- KML coordinates may carry a Z value (`0.0`); measurement is 2D.
+- KML coordinates are typically stored to 7 decimals, which is why the same polygon measures about 7 m² smaller
+  from a KML than from a full-precision shapefile.
+
+### Failed upload
+
+```bash
+curl -i -F "file=@samples/06_no_prj_should_fail.zip" http://127.0.0.1:8000/api/files/
+# take the "id" from the response, then:
 curl http://127.0.0.1:8000/api/files/cab9e6cd308f/
 ```
 
@@ -207,27 +395,36 @@ curl http://127.0.0.1:8000/api/files/cab9e6cd308f/
 }
 ```
 
+Asking for measurements of a failed file returns `409`, so an empty list is never confused with "no features":
+
 ```bash
-curl "http://127.0.0.1:8000/api/files/cab9e6cd308f/measurements/"
+curl -i http://127.0.0.1:8000/api/files/cab9e6cd308f/measurements/
 ```
 
 ```json
 { "detail": "File status is FAILED: parcels.shp has no CRS (.prj missing)." }
 ```
 
-(Returned with HTTP `409`.)
+Other inputs that end as `FAILED` without crashing the service:
+
+| Input | `error` |
+|---|---|
+| `samples/08_corrupt.zip` | `Invalid zip archive.` |
+| `samples/09_zip_without_shapefile.zip` | `Zip does not contain a .shp file.` |
+| `samples/10_zip_slip_attack.zip` | `Zip contains unsafe paths.` |
+| `samples/14_kml_malformed.kml` | Generic parse error; internal paths are not exposed |
 
 ### Unsupported extension
 
 ```bash
-curl -i -F "file=@15_wrong_extension.txt" http://127.0.0.1:8000/api/files/
+curl -i -F "file=@samples/15_wrong_extension.txt" http://127.0.0.1:8000/api/files/
 ```
 
 ```json
 { "detail": "Only .zip (Shapefile) and .kml are supported." }
 ```
 
-(Returned with HTTP `415`.)
+Returned with HTTP `415`; no record is created.
 
 ## Architecture
 
@@ -249,6 +446,7 @@ Geospatial/
 │       ├── crs.py       # UTM zone selection, reprojection (shapely.transform)
 │       ├── measure.py   # Area/length logic per geometry type
 │       └── ingest.py    # Orchestration: read → measure → persist
+├── samples/             # Sample inputs used in the examples above
 ├── tests/
 │   ├── __init__.py
 │   ├── conftest.py      # DB fixtures, shapefile fixtures
@@ -269,15 +467,28 @@ Geospatial/
 └── README.md
 ```
 
-### File Processing Flow
-Upload → validate → stream to temp → safe unzip (`is_relative_to`) → read all layers → iterate features → persist → set status
+### File processing flow
 
-### Measurement Flow
-Geometry type check → pick UTM from centroid → reproject (`shapely.transform`) → `.area` / `.length` → store
+1. Validate extension and size (`415`, `413`)
+2. Stream to a temp file
+3. For zips: safe unzip (`is_relative_to`, size cap); reject unsafe paths
+4. Read every `.shp` (or every KML layer); reject a shapefile without `.prj`
+5. Concatenate, iterate features, measure each one
+6. Persist features, set status `COMPLETED` or `FAILED`
+
+### Measurement flow
+
+1. Unsupported type (Point, MultiPoint, GeometryCollection): return with `measurement_supported: false` and a note
+2. Polygon types: check validity; if invalid, `make_valid` for measurement and add a note; if no polygonal part remains, mark unsupported
+3. Choose the CRS from the centroid: UTM zone, or the polar fallback (lat ≥ 84 or ≤ -80)
+4. Reproject with `shapely.transform`
+5. Polygons: `.area`. Lines: `.length` (geodesic in the polar case)
+6. Store the area or length, plus `projected_crs` and any note
 
 ## CRS handling
 
-Measuring in lat/lon degrees gives meaningless numbers, so every geometry is reprojected to a projected CRS before `.area` or `.length` is computed.
+Measuring in lat/lon degrees gives meaningless numbers, so every geometry is reprojected to a projected CRS before
+`.area` or `.length` is computed.
 
 | Case | Behavior |
 |---|---|
@@ -285,13 +496,17 @@ Measuring in lat/lon degrees gives meaningless numbers, so every geometry is rep
 | Polar (lat ≥ 84 or ≤ -80) | UTM is undefined. Polygon area uses equal-area `EPSG:6933`; line length uses a geodesic calculation (`pyproj.Geod`), because EPSG:6933 distorts lengths |
 | Shapefile without `.prj` | **Rejected** (`FAILED`). Guessing WGS84 would silently give wrong numbers |
 | KML | Assumed WGS84 (`EPSG:4326`), as required by the KML spec |
-| Input already projected | Kept as the stored CRS (e.g. `EPSG:32632`) and measured in that projection's units |
+| Input already projected | The file's own CRS is reported in `crs` (e.g. `EPSG:32632`); measurement still uses the feature's UTM zone, so data already in that zone gives identical results to the same data in lat/lon |
+| Several shapefiles with different CRSs in one zip | All are reprojected to the first shapefile's CRS; stored geometry and `crs` then reflect that first CRS |
 | Invalid polygon | Repaired with `shapely.make_valid` **for measurement only**. Stored geometry is unchanged and a `note` is added. If nothing polygonal remains after repair the feature is marked unsupported |
-| Stored geometry and CRS | Original geometry and CRS are preserved per feature. **Exception:** if a zip contains several shapefiles with different CRSs, all are reprojected to the first shapefile's CRS before measurement |
+<!-- VERIFY the "Input already projected" row with a shapefile in EPSG:3857 (check projected_crs and area) -->
 
 ### Accuracy note
 
-UTM is not perfectly distance- or area-preserving away from its central meridian. For the 1 km square at lon 10°E in zone 32 (central meridian 9°E), the UTM area is 999,234.8 m² against a geodesic reference of 999,907 m² (-0.07%). This matches the expected UTM scale factor (~0.99966 squared), so it is a property of the projection and not an error in the code. A geodesic test in the suite asserts line lengths within 0.5%.
+UTM is not perfectly distance- or area-preserving away from its central meridian. For the 1 km square at lon 10°E in
+zone 32 (central meridian 9°E), the UTM area is 999,234.8 m² against a geodesic reference of about 999,907 m² (-0.07%).
+That matches the expected UTM scale factor (~0.99966, squared for area), so it is a property of the projection and not
+an error in the code. A test in the suite asserts line lengths within 0.5% of a geodesic reference.
 
 ## Design decisions
 
@@ -306,14 +521,15 @@ UTM is not perfectly distance- or area-preserving away from its central meridian
 | Zip-slip guard with `Path.is_relative_to` plus size cap | `startswith` can be bypassed by sibling paths like `/tmp/abc_evil` |
 | Synchronous processing plus a `status` field | Simple now, async-ready later |
 | SQLite with JSON columns | Zero setup; a Postgres URL is a possible later step (driver not included) |
-| Failed upload returns `201` with `status: FAILED`, `id` and `error` | The failed record stays retrievable via GET. 415 and 413 stay real 4xx errors |
-| Failed/procesing file measurements return `409` | Prevents confusion with empty results; error is in response body |
-| KML boilerplate keys filtered | GDAL adds `tessellate`, `extrude`, `visibility`, etc.; only `Name`/`description` kept |
-| Parse errors return generic message | Temp paths like `/tmp/.../upload.kml` are not leaked to clients |
+| Failed upload returns `201` with `status: FAILED`, `id` and `error` | The failed record stays retrievable via GET. Validation errors (`415`, `413`) stay real 4xx errors |
+| Measurements of a `FAILED`/`PROCESSING` file return `409` | An empty `200` would look the same as a file with no features; the error is in the body |
+| KML boilerplate keys filtered | GDAL adds `tessellate`, `extrude`, `visibility`, etc.; only those are removed, user attributes are kept |
+| Parse errors return a generic message | Temp paths like `/tmp/.../upload.kml` are not leaked to clients |
 
 ## Limitations
 
-- Only Polygon, MultiPolygon, LineString and MultiLineString are measured. Points, MultiPoints and GeometryCollections are returned with `measurement_supported: false` and a note.
+- Only Polygon, MultiPolygon, LineString and MultiLineString are measured. Points, MultiPoints and GeometryCollections
+  are returned with `measurement_supported: false` and a note.
 - A single feature that spans several UTM zones is measured in one zone (chosen from its centroid).
 - Processing is synchronous, so very large files block the request.
 - No delete endpoint. No KMZ or GeoJSON input.
@@ -330,19 +546,29 @@ UTM is not perfectly distance- or area-preserving away from its central meridian
 
 ## Learnings
 
-- **Measuring in degrees vs projected CRS:** The first time I saw 0.0001°² reported as an "area," it was clearly wrong. Projected CRS is non-negotiable for metric measurements.
-- **Failed upload as 201 + FAILED:** In production I'd probably return 202 Accepted with a polling endpoint, but for this scope the synchronous status field works and keeps the failed record queryable.
-- **Invalid polygon repair:** `make_valid` can turn a bowtie into a MultiPolygon of two lobes, but a degenerate line becomes a LineString — you must re-check the geometry type after repair.
-- **Zip-slip bypass:** `startswith("/tmp/abc")` passes for `/tmp/abc_evil`; `is_relative_to` is the correct check.
-- **Test DB isolation:** The `commit()` in `process_file` broke rollback-based fixtures. Switching to `drop_all/create_all` per test fixed it cleanly.
-- **UTM accuracy check:** The -0.07% error on a 1 km square at 10°E matched the UTM scale factor (0.99966²) exactly — the test caught a real projection artifact, not a bug.
+- **Degrees vs projected CRS:** Features in `EPSG:4326` have coordinates in degrees, so calling `.area` on them
+  returns square degrees, which means nothing. Reprojecting to a UTM zone first is what makes the numbers real metres.
+- **Failed upload as 201 + FAILED:** In production I'd probably return `202 Accepted` with a polling endpoint, but for
+  this scope the synchronous `status` field works and keeps the failed record queryable. The matching downside is that
+  `201` can hide a failure, so the README says to always check `status`.
+- **Invalid polygon repair:** `make_valid` can change the geometry type (a bowtie becomes two lobes, a degenerate
+  polygon can collapse to a line), so I re-check the type after repair and mark the feature unsupported if nothing
+  polygonal remains.
+- **Zip-slip bypass:** `startswith("/tmp/abc")` also passes for `/tmp/abc_evil`; `Path.is_relative_to` is the correct check.
+- **Test DB isolation:** The `commit()` inside `process_file` broke rollback-based fixtures. Dropping and recreating the
+  tables around each test fixed it cleanly, and keeps tests off the real `geo.db`.
+- **UTM accuracy:** Comparing a manual result against a geodesic reference showed a -0.07% difference. It matched the
+  UTM scale factor at 10°E to within a few m², so it is projection distortion, not a bug.
+- **Manual edge-case pass:** Running a pack of 15 sample files (corrupt zip, zip-slip, missing `.prj`,
+  GeometryCollection, malformed KML) showed that bad input ends as a readable `FAILED` or an "unsupported" note, never
+  a server error.
 
 ## CI/CD
 
 - **GitHub Actions** (`.github/workflows/ci.yml`):
-  - `test` — pytest on Ubuntu 3.12
+  - `test` — pytest on Ubuntu, Python 3.12
   - `lint` — ruff check
-  - `docker-smoke` — builds image, runs container, uploads sample.kml, verifies measurements
+  - `docker-smoke` — builds the image, runs the container, uploads `sample.kml`, verifies measurements
 - **Concurrency control** — cancels in-progress runs on new pushes
 - **Docker multi-stage build** — smaller image, non-root user, health check (urllib)
 - **Requirements** — production deps in `requirements.txt`; dev deps (`pytest`, `httpx`, `ruff`) in `requirements-dev.txt`
